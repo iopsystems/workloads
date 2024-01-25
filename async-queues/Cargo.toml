@@ -3,7 +3,7 @@ name = "async-queues"
 version = "0.1.0"
 edition = "2021"
 authors = ["Brian Martin <brian@iop.systems>"]
-repository = "https://github.com/iopsystems/benchmarks"
+repository = "https://github.com/iopsystems/workloads"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
