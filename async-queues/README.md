@@ -1,8 +1,8 @@
 # async-queues
 
-Simple benchmarks for Rust async queues, covering both MPMC and broadcast types.
+Simple workload for Rust async queues, covering both MPMC and broadcast types.
 
-This benchmark consists of one or more publishers writing timestamped messages
+This workload consists of one or more publishers writing timestamped messages
 into an async queue. One or more subscribers read messages from the queue,
 calculate the amount of time from publish to receive, and update the stats
 accordingly.
