@@ -1,7 +1,9 @@
+use super::Config;
 use crate::*;
 
-use ::async_channel::{Receiver, Sender};
 use ratelimit::Ratelimiter;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::{Receiver, Sender};
 
 use core::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -9,12 +11,14 @@ use std::sync::Arc;
 pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let ratelimiter = config.ratelimiter();
 
-    let (tx, rx) = ::async_channel::bounded(config.queue_depth());
+    // note: tokio broadcast channels always have `overflow` behavior where
+    // lagging subscribers will see messages dropped
+    let (tx, _rx) = tokio::sync::broadcast::channel::<Message>(config.queue_depth());
 
     let runtime = config.runtime();
 
     for _ in 0..config.subscribers() {
-        runtime.spawn_subscriber(receiver(rx.clone()));
+        runtime.spawn_subscriber(receiver(tx.subscribe()));
     }
 
     for _ in 0..config.publishers() {
@@ -26,7 +30,7 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn receiver(rx: Receiver<Message>) {
+pub async fn receiver(mut rx: Receiver<Message>) {
     while RUNNING.load(Ordering::Relaxed) {
         match rx.recv().await {
             Ok(message) => {
@@ -34,6 +38,12 @@ pub async fn receiver(rx: Receiver<Message>) {
 
                 RECV.increment();
                 RECV_OK.increment();
+            }
+            Err(RecvError::Lagged(count)) => {
+                RECV.increment();
+                RECV_OVERFLOW.increment();
+
+                DROPPED.add(count);
             }
             Err(_) => {
                 RECV.increment();
@@ -58,7 +68,8 @@ pub async fn sender(config: Config, tx: Sender<Message>, ratelimiter: Arc<Option
 
         let message = Message::new(config.message_length());
 
-        if tx.send(message).await.is_ok() {
+        // note: tokio broadcast channel send is not async for some reason
+        if tx.send(message).is_ok() {
             SEND.increment();
             SEND_OK.increment();
 
@@ -66,8 +77,6 @@ pub async fn sender(config: Config, tx: Sender<Message>, ratelimiter: Arc<Option
         } else {
             SEND.increment();
             SEND_EX.increment();
-
-            DROPPED.increment();
         }
     }
 }

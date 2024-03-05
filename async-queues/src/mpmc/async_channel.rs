@@ -1,7 +1,8 @@
+use super::Config;
 use crate::*;
 
+use ::async_channel::{Receiver, Sender};
 use ratelimit::Ratelimiter;
-use widecast::*;
 
 use core::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -9,19 +10,15 @@ use std::sync::Arc;
 pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let ratelimiter = config.ratelimiter();
 
+    let (tx, rx) = ::async_channel::bounded(config.queue_depth());
+
     let runtime = config.runtime();
 
-    // note: broadcaster's channels always have `overflow` behavior where
-    // lagging subscribers will see messages dropped
-    let tx = widecast::Sender::<Message>::new(config.queue_depth());
-
-    for _ in 0..config.subscribers() {
-        runtime.spawn_subscriber(receiver(tx.subscribe()));
+    for _ in 0..config.consumers() {
+        runtime.spawn_subscriber(receiver(rx.clone()));
     }
 
-    let tx = Arc::new(tokio::sync::Mutex::new(tx));
-
-    for _ in 0..config.publishers() {
+    for _ in 0..config.producers() {
         runtime.spawn_publisher(sender(config.clone(), tx.clone(), ratelimiter.clone()));
     }
 
@@ -30,7 +27,7 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn receiver(mut rx: Receiver<Message>) {
+pub async fn receiver(rx: Receiver<Message>) {
     while RUNNING.load(Ordering::Relaxed) {
         match rx.recv().await {
             Ok(message) => {
@@ -38,12 +35,6 @@ pub async fn receiver(mut rx: Receiver<Message>) {
 
                 RECV.increment();
                 RECV_OK.increment();
-            }
-            Err(RecvError::Lagged(count)) => {
-                RECV.increment();
-                RECV_OVERFLOW.increment();
-
-                DROPPED.add(count);
             }
             Err(_) => {
                 RECV.increment();
@@ -53,11 +44,7 @@ pub async fn receiver(mut rx: Receiver<Message>) {
     }
 }
 
-pub async fn sender(
-    config: Config,
-    tx: Arc<tokio::sync::Mutex<Sender<Message>>>,
-    ratelimiter: Arc<Option<Ratelimiter>>,
-) {
+pub async fn sender(config: Config, tx: Sender<Message>, ratelimiter: Arc<Option<Ratelimiter>>) {
     while !RUNNING.load(Ordering::Relaxed) {
         std::hint::spin_loop()
     }
@@ -72,11 +59,16 @@ pub async fn sender(
 
         let message = Message::new(config.message_length());
 
-        let mut sender = tx.lock().await;
-        sender.send(message);
-        SEND.increment();
-        SEND_OK.increment();
+        if tx.send(message).await.is_ok() {
+            SEND.increment();
+            SEND_OK.increment();
 
-        SEND_BYTES.add(config.message_length() as u64);
+            SEND_BYTES.add(config.message_length() as u64);
+        } else {
+            SEND.increment();
+            SEND_EX.increment();
+
+            DROPPED.increment();
+        }
     }
 }

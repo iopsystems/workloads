@@ -6,6 +6,14 @@ authors = ["Brian Martin <brian@iop.systems>"]
 repository = "https://github.com/iopsystems/workloads"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "async-queues-broadcast"
+path = "src/async-queues-broadcast.rs"
+
+[[bin]]
+name = "async-queues-mpmc"
+path = "src/async-queues-mpmc.rs"
+
 [dependencies]
 async-broadcast = "0.6.0"
 async-channel = "2.1.1"
@@ -25,7 +33,3 @@ splaycast = "0.2.0"
 tokio = { version = "1.35.1", features = ["full"] }
 tokio-stream = "0.1.14"
 widecast = { git = "https://github.com/Phantomical/widecast" }
-
-[[bin]]
-name = "async-queues"
-path = "src/main.rs"
