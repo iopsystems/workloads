@@ -1,6 +1,7 @@
+use super::Config;
 use crate::*;
 
-use kanal::{AsyncReceiver, AsyncSender};
+use flume::{Receiver, Sender};
 use ratelimit::Ratelimiter;
 
 use core::sync::atomic::Ordering;
@@ -9,15 +10,15 @@ use std::sync::Arc;
 pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let ratelimiter = config.ratelimiter();
 
-    let (tx, rx) = kanal::bounded_async(config.queue_depth());
+    let (tx, rx) = flume::bounded(config.queue_depth());
 
     let runtime = config.runtime();
 
-    for _ in 0..config.subscribers() {
+    for _ in 0..config.consumers() {
         runtime.spawn_subscriber(receiver(rx.clone()));
     }
 
-    for _ in 0..config.publishers() {
+    for _ in 0..config.producers() {
         runtime.spawn_publisher(sender(config.clone(), tx.clone(), ratelimiter.clone()));
     }
 
@@ -26,9 +27,9 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub async fn receiver(rx: AsyncReceiver<Message>) {
+pub async fn receiver(rx: Receiver<Message>) {
     while RUNNING.load(Ordering::Relaxed) {
-        match rx.recv().await {
+        match rx.recv_async().await {
             Ok(message) => {
                 message.validate();
 
@@ -43,11 +44,7 @@ pub async fn receiver(rx: AsyncReceiver<Message>) {
     }
 }
 
-pub async fn sender(
-    config: Config,
-    tx: AsyncSender<Message>,
-    ratelimiter: Arc<Option<Ratelimiter>>,
-) {
+pub async fn sender(config: Config, tx: Sender<Message>, ratelimiter: Arc<Option<Ratelimiter>>) {
     while !RUNNING.load(Ordering::Relaxed) {
         std::hint::spin_loop()
     }
@@ -62,7 +59,7 @@ pub async fn sender(
 
         let message = Message::new(config.message_length());
 
-        if tx.send(message).await.is_ok() {
+        if tx.send_async(message).await.is_ok() {
             SEND.increment();
             SEND_OK.increment();
 

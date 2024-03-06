@@ -1,3 +1,4 @@
+use super::Config;
 use crate::*;
 
 use async_std::channel::{Receiver, Sender};
@@ -13,11 +14,11 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
 
     let runtime = config.runtime();
 
-    for _ in 0..config.subscribers() {
+    for _ in 0..config.consumers() {
         runtime.spawn_subscriber(receiver(rx.clone()));
     }
 
-    for _ in 0..config.publishers() {
+    for _ in 0..config.producers() {
         runtime.spawn_publisher(sender(config.clone(), tx.clone(), ratelimiter.clone()));
     }
 

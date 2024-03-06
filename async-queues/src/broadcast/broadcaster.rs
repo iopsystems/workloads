@@ -1,6 +1,7 @@
+use super::Config;
 use crate::*;
 
-use ::async_broadcast::{Receiver, RecvError, Sender};
+use broadcaster::*;
 use ratelimit::Ratelimiter;
 
 use core::sync::atomic::Ordering;
@@ -9,13 +10,18 @@ use std::sync::Arc;
 pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let ratelimiter = config.ratelimiter();
 
-    let (tx, mut rx) = ::async_broadcast::broadcast(config.queue_depth());
-    rx.set_overflow(true);
-
     let runtime = config.runtime();
 
+    // note: broadcaster's channels always have `overflow` behavior where
+    // lagging subscribers will see messages dropped
+    let tx = broadcaster::channel::<Message>(
+        runtime.fanout_runtime(),
+        config.queue_depth(),
+        config.fanout(),
+    );
+
     for _ in 0..config.subscribers() {
-        runtime.spawn_subscriber(receiver(rx.clone()));
+        runtime.spawn_subscriber(receiver(tx.subscribe()));
     }
 
     for _ in 0..config.publishers() {
@@ -29,14 +35,14 @@ pub fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
 
 pub async fn receiver(mut rx: Receiver<Message>) {
     while RUNNING.load(Ordering::Relaxed) {
-        match rx.recv_direct().await {
+        match rx.recv().await {
             Ok(message) => {
                 message.validate();
 
                 RECV.increment();
                 RECV_OK.increment();
             }
-            Err(RecvError::Overflowed(count)) => {
+            Err(RecvError::Lagged(count)) => {
                 RECV.increment();
                 RECV_OVERFLOW.increment();
 
@@ -65,7 +71,8 @@ pub async fn sender(config: Config, tx: Sender<Message>, ratelimiter: Arc<Option
 
         let message = Message::new(config.message_length());
 
-        if tx.broadcast_direct(message).await.is_ok() {
+        // note: tokio broadcast channel send is not async for some reason
+        if tx.send(message).is_ok() {
             SEND.increment();
             SEND_OK.increment();
 
